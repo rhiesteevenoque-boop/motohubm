@@ -1,0 +1,11 @@
+using System.Security.Claims; using Microsoft.AspNetCore.Authorization; using Microsoft.AspNetCore.Mvc; using Microsoft.EntityFrameworkCore; using MotoHubAPI.Data; using MotoHubAPI.Models;
+namespace MotoHubAPI.Controllers;
+[ApiController,Authorize,Route("api/bookings")]
+public class BookingsController(MotoHubDbContext db):ControllerBase {
+ int UserId=>int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+ [HttpGet] public async Task<IActionResult> Get(){var q=db.Bookings.AsNoTracking().Include(x=>x.Motorcycle).Include(x=>x.ServiceItem).Include(x=>x.User);if(User.IsInRole("Admin"))return Ok(await q.OrderByDescending(x=>x.CreatedAt).Select(x=>new{x.Id,x.UserId,Customer=x.User!.FullName,Motorcycle=x.Motorcycle!.Make+" "+x.Motorcycle.Model,Service=x.ServiceItem!.Name,x.ScheduledAt,x.Status,x.Notes}).ToListAsync());return Ok(await q.Where(x=>x.UserId==UserId).OrderByDescending(x=>x.CreatedAt).Select(x=>new{x.Id,x.MotorcycleId,Motorcycle=x.Motorcycle!.Make+" "+x.Motorcycle.Model,Service=x.ServiceItem!.Name,x.ScheduledAt,x.Status,x.Notes}).ToListAsync());}
+ [HttpPost] public async Task<IActionResult> Create(CreateBookingRequest r){if(r.ScheduledAt<=DateTime.Now)return BadRequest(new{message="Schedule must be in the future."});if(!await db.Motorcycles.AnyAsync(x=>x.Id==r.MotorcycleId&&x.UserId==UserId))return BadRequest(new{message="Motorcycle not found for this account."});if(!await db.Services.AnyAsync(x=>x.Id==r.ServiceItemId&&x.IsActive))return BadRequest(new{message="Service is unavailable."});var x=new Booking{UserId=UserId,MotorcycleId=r.MotorcycleId,ServiceItemId=r.ServiceItemId,ScheduledAt=r.ScheduledAt,Notes=r.Notes??""};db.Bookings.Add(x);await db.SaveChangesAsync();return CreatedAtAction(nameof(Get),new{id=x.Id},x);}
+ [Authorize(Roles="Admin"),HttpPatch("{id:int}/status")] public async Task<IActionResult> Status(int id,UpdateBookingStatusRequest r){var allowed=new[]{"Pending","Confirmed","InProgress","Completed","Cancelled"};if(!allowed.Contains(r.Status))return BadRequest(new{message="Invalid status."});var x=await db.Bookings.FindAsync(id);if(x is null)return NotFound();x.Status=r.Status;await db.SaveChangesAsync();return Ok(new{id=x.Id,x.Status});}
+}
+public record CreateBookingRequest(int MotorcycleId,int ServiceItemId,DateTime ScheduledAt,string? Notes);
+public record UpdateBookingStatusRequest(string Status);
